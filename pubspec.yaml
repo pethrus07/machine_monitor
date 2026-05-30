@@ -1,0 +1,23 @@
+name: machine_monitor
+description: Sistema unificado de monitoramento industrial (Monitor de Produção + Bancada TEX).
+publish_to: 'none'
+version: 2.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.2.2
+  fl_chart: ^0.68.0
+  intl: ^0.19.0
+  logging: ^1.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
