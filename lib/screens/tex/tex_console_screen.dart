@@ -2,7 +2,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/models.dart';
 import '../../models/tex_models.dart';
+import '../../models/tex_setup.dart';
 import '../../services/data_sources.dart';
+import '../../services/storage/storage_service.dart';
 import '../../core/theme/app_theme.dart';
 import 'operation_view.dart';
 import 'io_view.dart';
@@ -28,12 +30,29 @@ class _TexConsoleScreenState extends State<TexConsoleScreen> {
   late final TexSession _session;
   int _tab = 0;
 
+  /// Configuração de teste (BCD/câmara/testes) persistida por máquina.
+  TexSetup _setup = const TexSetup();
+
   static const _titles = ['OPERAÇÃO', 'ENTRADAS / SAÍDAS', 'DIAGNÓSTICOS'];
 
   @override
   void initState() {
     super.initState();
     _session = AppDataSource.tex.connect(widget.machine);
+    _loadSetup();
+  }
+
+  Future<void> _loadSetup() async {
+    final saved = await StorageService.loadTexSetup(widget.machine.id);
+    if (!mounted) return;
+    setState(() => _setup = saved);
+  }
+
+  /// Atualiza a configuração, persiste e — quando o BCD muda — envia ao CLP.
+  void _updateSetup(TexSetup next, {bool writeBcd = false}) {
+    setState(() => _setup = next);
+    StorageService.saveTexSetup(widget.machine.id, next);
+    if (writeBcd) _session.setBcd(next.bcd);
   }
 
   @override
@@ -80,7 +99,14 @@ class _TexConsoleScreenState extends State<TexConsoleScreen> {
         return DiagnosticsView(snapshot: snap);
       case 0:
       default:
-        return OperationView(snapshot: snap, session: _session);
+        return OperationView(
+          snapshot: snap,
+          session: _session,
+          setup: _setup,
+          onBcd: (v) => _updateSetup(_setup.withBcd(v), writeBcd: true),
+          onChamber: (v) => _updateSetup(_setup.selectChamber(v)),
+          onTests: (v) => _updateSetup(_setup.withTestsForCurrent(v)),
+        );
     }
   }
 }

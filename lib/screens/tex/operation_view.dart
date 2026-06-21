@@ -1,34 +1,44 @@
 import 'package:flutter/material.dart';
 import '../../models/tex_models.dart';
+import '../../models/tex_setup.dart';
 import '../../services/data_sources.dart';
 import '../../core/theme/app_theme.dart';
-import '../../widgets/tex/tex_panel.dart';
+import '../../widgets/tex/tex_stepper.dart';
 import '../../widgets/tex/value_readout.dart';
 import '../../widgets/tex/tex_action_button.dart';
 
-/// Tela principal do console TEX: navegação de câmara, barra de progresso,
-/// leituras de pressão e vazamento e os botões de comando.
+/// Tela principal do console TEX: leituras de pressão/vazamento, status do
+/// ciclo, o painel de setup (BCD / câmara / testes por câmara) e os botões de
+/// comando.
 ///
-/// Recebe um [TexSnapshot] (estado) e a [TexSession] (para disparar comandos).
-/// O layout adapta-se: lado a lado em telas largas, empilhado em telas
-/// estreitas — ao contrário do original, que assumia paisagem fixa.
+/// O BCD é escrito no CLP ([onBcd]); câmara e testes por câmara são
+/// configuração local da máquina ([onChamber], [onTests]). O layout adapta-se:
+/// painel de comando à direita em telas largas, empilhado em telas estreitas.
 class OperationView extends StatelessWidget {
-  const OperationView({super.key, required this.snapshot, required this.session});
+  const OperationView({
+    super.key,
+    required this.snapshot,
+    required this.session,
+    required this.setup,
+    required this.onBcd,
+    required this.onChamber,
+    required this.onTests,
+  });
 
   final TexSnapshot snapshot;
   final TexSession session;
+  final TexSetup setup;
+  final ValueChanged<int> onBcd;
+  final ValueChanged<int> onChamber;
+  final ValueChanged<int> onTests;
 
   @override
   Widget build(BuildContext context) {
     final wide = MediaQuery.sizeOf(context).width >= 520;
 
-    final readouts = Column(
+    final readouts = Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _CameraNav(snapshot: snapshot, session: session),
-        const SizedBox(height: 10),
-        _StatusRow(snapshot: snapshot),
-        const SizedBox(height: 10),
         Expanded(
           child: ValueReadout(
             title: 'PRESSÃO ATUAL',
@@ -36,7 +46,7 @@ class OperationView extends StatelessWidget {
             unit: snapshot.pressaoUnit,
           ),
         ),
-        const SizedBox(height: 10),
+        const SizedBox(width: 10),
         Expanded(
           child: ValueReadout(
             title: 'VAZAMENTO',
@@ -47,22 +57,40 @@ class OperationView extends StatelessWidget {
       ],
     );
 
+    final leftColumn = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _StatusRow(snapshot: snapshot),
+        const SizedBox(height: 10),
+        Expanded(child: readouts),
+        const SizedBox(height: 10),
+        _SetupPanel(
+          setup: setup,
+          wide: wide,
+          onBcd: onBcd,
+          onChamber: onChamber,
+          onTests: onTests,
+        ),
+      ],
+    );
+
     return Padding(
       padding: const EdgeInsets.all(12),
       child: wide
           ? Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Expanded(child: readouts),
+                Expanded(child: leftColumn),
                 const SizedBox(width: 12),
                 SizedBox(
-                    width: 116,
-                    child: _ActionButtons(snapshot: snapshot, session: session)),
+                  width: 132,
+                  child: _ActionButtons(snapshot: snapshot, session: session),
+                ),
               ],
             )
           : Column(
               children: [
-                Expanded(child: readouts),
+                Expanded(child: leftColumn),
                 const SizedBox(height: 12),
                 _ActionButtonsRow(snapshot: snapshot, session: session),
               ],
@@ -71,71 +99,81 @@ class OperationView extends StatelessWidget {
   }
 }
 
-// ─── Navegação de câmara ──────────────────────────────────────────────────────
+// ─── Painel de setup (BCD / câmara / testes) ──────────────────────────────────
 
-class _CameraNav extends StatelessWidget {
-  const _CameraNav({required this.snapshot, required this.session});
+class _SetupPanel extends StatelessWidget {
+  const _SetupPanel({
+    required this.setup,
+    required this.wide,
+    required this.onBcd,
+    required this.onChamber,
+    required this.onTests,
+  });
 
-  final TexSnapshot snapshot;
-  final TexSession session;
+  final TexSetup setup;
+  final bool wide;
+  final ValueChanged<int> onBcd;
+  final ValueChanged<int> onChamber;
+  final ValueChanged<int> onTests;
 
   @override
   Widget build(BuildContext context) {
-    return TexPanel(
-      child: SizedBox(
-        height: 56,
-        child: Row(
+    final bcd = TexStepper(
+      label: 'BCD',
+      hint: 'ENVIA AO CLP',
+      value: setup.bcd,
+      min: 0,
+      max: TexSetup.maxBcd,
+      accent: AppTheme.readout,
+      onChanged: onBcd,
+    );
+
+    final camara = TexStepper(
+      label: 'CÂMARA',
+      hint: 'LOCAL',
+      value: setup.selectedChamber,
+      min: 1,
+      max: TexSetup.maxChambers,
+      onChanged: onChamber,
+    );
+
+    final testes = TexStepper(
+      label: 'TESTES / CÂMARA',
+      hint: 'CÂM. ${setup.selectedChamber}',
+      value: setup.currentTests,
+      min: 1,
+      max: TexSetup.maxTests,
+      suffix: 'testes',
+      onChanged: onTests,
+    );
+
+    if (wide) {
+      return Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(child: bcd),
+          const SizedBox(width: 10),
+          Expanded(child: camara),
+          const SizedBox(width: 10),
+          Expanded(child: testes),
+        ],
+      );
+    }
+
+    // Estreito: BCD em destaque na primeira linha, câmara + testes abaixo.
+    return Column(
+      children: [
+        bcd,
+        const SizedBox(height: 10),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _ArrowButton(
-                icon: Icons.chevron_left_rounded, onTap: session.prevCamera),
-            Expanded(
-              child: Center(
-                child: RichText(
-                  textAlign: TextAlign.center,
-                  text: TextSpan(
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.bold),
-                    children: [
-                      TextSpan(
-                          text: snapshot.programName,
-                          style: const TextStyle(color: AppTheme.textPrimary)),
-                      const TextSpan(text: '   '),
-                      TextSpan(
-                        text:
-                            'CÂMARA ${snapshot.cameraNumber}/${snapshot.totalCameras}',
-                        style: const TextStyle(
-                            color: AppTheme.textSecondary, fontSize: 14),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            _ArrowButton(
-                icon: Icons.chevron_right_rounded, onTap: session.nextCamera),
+            Expanded(child: camara),
+            const SizedBox(width: 10),
+            Expanded(child: testes),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _ArrowButton extends StatelessWidget {
-  const _ArrowButton({required this.icon, required this.onTap});
-  final IconData icon;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(AppTheme.radiusSmall),
-      child: Container(
-        width: 52,
-        height: 56,
-        alignment: Alignment.center,
-        child: Icon(icon, color: AppTheme.textPrimary, size: 30),
-      ),
+      ],
     );
   }
 }
@@ -150,8 +188,7 @@ class _StatusRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final color = snapshot.statusColor;
     final running = snapshot.running;
-    final showSpinner =
-        running && snapshot.phase != TexPhase.resultado;
+    final showSpinner = running && snapshot.phase != TexPhase.resultado;
 
     return SizedBox(
       height: 40,
@@ -294,39 +331,49 @@ class _ActionButtonsRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: TexActionButton(
-            icon: Icons.play_arrow_rounded,
-            label: 'START',
-            onTap: session.start,
-            color: snapshot.running ? AppTheme.success : null,
-            active: snapshot.running,
+    return SizedBox(
+      height: 84,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            flex: 2,
+            child: TexActionButton(
+              icon: Icons.play_arrow_rounded,
+              label: 'START',
+              onTap: session.start,
+              color: snapshot.running ? AppTheme.success : null,
+              active: snapshot.running,
+              height: double.infinity,
+            ),
           ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: TexActionButton(
-            icon: Icons.stop_rounded,
-            label: 'STOP',
-            onTap: session.stop,
-            color: snapshot.running
-                ? AppTheme.danger
-                : AppTheme.danger.withValues(alpha: 0.45),
+          const SizedBox(width: 10),
+          Expanded(
+            flex: 2,
+            child: TexActionButton(
+              icon: Icons.stop_rounded,
+              label: 'STOP',
+              onTap: session.stop,
+              color: snapshot.running
+                  ? AppTheme.danger
+                  : AppTheme.danger.withValues(alpha: 0.45),
+              height: double.infinity,
+            ),
           ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          child: TexActionButton(
-            icon: Icons.block_rounded,
-            label: 'BLOQUEIO',
-            onTap: session.toggleEscapeBlock,
-            color: snapshot.escapeBloqueado ? AppTheme.danger : null,
-            active: snapshot.escapeBloqueado,
+          const SizedBox(width: 10),
+          Expanded(
+            flex: 1,
+            child: TexActionButton(
+              icon: Icons.block_rounded,
+              label: 'BLOQUEIO',
+              onTap: session.toggleEscapeBlock,
+              color: snapshot.escapeBloqueado ? AppTheme.danger : null,
+              active: snapshot.escapeBloqueado,
+              height: double.infinity,
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

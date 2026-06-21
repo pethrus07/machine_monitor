@@ -45,8 +45,9 @@ class _SimulatedTexSession implements TexSession {
   double _progresso = 0;
   bool _running = false;
   bool _bloqueado = false;
-  int _camera = 1;
-  final int _totalCameras = 1;
+  int _bcd = 0;
+  static const int _camera = 1;
+  static const int _totalCameras = 1;
 
   late List<TexIoPin> _inputs = _initInputs();
   late List<TexIoPin> _outputs = _initOutputs();
@@ -91,14 +92,8 @@ class _SimulatedTexSession implements TexSession {
   }
 
   @override
-  void nextCamera() {
-    _camera = _camera < _totalCameras ? _camera + 1 : 1;
-    _publish();
-  }
-
-  @override
-  void prevCamera() {
-    _camera = _camera > 1 ? _camera - 1 : _totalCameras;
+  void setBcd(int value) {
+    _bcd = value;
     _publish();
   }
 
@@ -260,7 +255,7 @@ class _SimulatedTexSession implements TexSession {
   void _publish() => _snapshot.value = _build();
 
   TexSnapshot _build() => TexSnapshot(
-        programName: '#PRG TESTE',
+        programName: '#PRG BCD $_bcd',
         cameraNumber: _camera,
         totalCameras: _totalCameras,
         phase: _phase,

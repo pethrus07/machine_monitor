@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../models/models.dart';
+import '../../models/tex_setup.dart';
 
 /// Persistência local via SharedPreferences.
 ///
@@ -49,5 +50,26 @@ class StorageService {
   static Future<void> clearSession() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keySession);
+  }
+
+  // ── Configuração de teste TEX (por máquina) ──────────────────────────────────
+
+  static String _texSetupKey(String machineId) => 'tex_setup_$machineId';
+
+  static Future<void> saveTexSetup(String machineId, TexSetup setup) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_texSetupKey(machineId), jsonEncode(setup.toJson()));
+  }
+
+  /// Carrega a configuração da máquina, ou uma [TexSetup] padrão se não houver.
+  static Future<TexSetup> loadTexSetup(String machineId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_texSetupKey(machineId));
+    if (raw == null) return const TexSetup();
+    try {
+      return TexSetup.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+    } catch (_) {
+      return const TexSetup();
+    }
   }
 }

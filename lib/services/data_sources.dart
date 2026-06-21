@@ -42,8 +42,9 @@ abstract class TexSession {
   void start();
   void stop();
   void toggleEscapeBlock();
-  void nextCamera();
-  void prevCamera();
+
+  /// Seleciona o código BCD na bancada (escrito no CLP).
+  void setBcd(int value);
 
   Future<void> dispose();
 }

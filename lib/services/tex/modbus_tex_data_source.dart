@@ -116,19 +116,8 @@ class _ModbusTexSession implements TexSession {
     _snapshot.value = _snapshot.value.copyWith(escapeBloqueado: _escapeBloqueado);
   }
 
-  /// Navegação de câmara = troca do BCD selecionado no CLP.
   @override
-  void nextCamera() {
-    final atual = _tex.data.value.currentChamber;
-    _guard(() => _tex.setBCD(atual + 1));
-  }
-
-  @override
-  void prevCamera() {
-    final atual = _tex.data.value.currentChamber;
-    if (atual <= 1) return;
-    _guard(() => _tex.setBCD(atual - 1));
-  }
+  void setBcd(int value) => _guard(() => _tex.setBCD(value));
 
   /// Executa um comando de escrita ignorando falhas pontuais de rede (a leitura
   /// contínua já sinaliza perda de comunicação por outro caminho).
