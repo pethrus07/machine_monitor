@@ -136,7 +136,9 @@ class _MachineListScreenState extends State<MachineListScreen>
   Future<void> _addMachine() async {
     final result = await Navigator.push<Machine>(
       context,
-      MaterialPageRoute(builder: (_) => const AddMachineScreen()),
+      MaterialPageRoute(
+        builder: (_) => AddMachineScreen(existing: _machines),
+      ),
     );
     if (result == null) return;
     final list = [..._machines, result];

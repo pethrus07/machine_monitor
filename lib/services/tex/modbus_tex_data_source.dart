@@ -1,23 +1,24 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:logging/logging.dart';
-import '../../core/network/ihm_inovance.dart';
 import '../../models/models.dart';
+import '../../models/tex_data.dart';
 import '../../models/tex_models.dart';
 import '../data_sources.dart';
+import 'tex_g4.dart';
 import 'tex_register_map.dart';
 
-/// Fonte real da bancada TEX (Fase 2) via Modbus TCP/IP.
+/// Fonte real da bancada TEX via Modbus TCP/IP.
 ///
-/// Reaproveita exatamente a mesma pilha de rede do monitor ([IHMInovance] →
-/// [ModbusClientTcp]). A sessão conecta, lê os mapas LW/LB segundo o
-/// [TexRegisterMap] e reconstrói um [TexSnapshot] na cadência configurada; os
-/// comandos do operador viram escrita de coils.
+/// Cada chamada de [connect] cria uma sessão com o seu **próprio** [TexG4]
+/// conectado ao IP daquela máquina — duas bancadas (TEX 1, TEX 2, …) rodam em
+/// instâncias totalmente isoladas, sem estado compartilhado. A sessão lê o
+/// [TexData] cru continuamente e o traduz em [TexSnapshot] para a tela.
 class ModbusTexDataSource implements TexDataSource {
   ModbusTexDataSource({
     this.port = 502,
     this.unitId = 1,
-    this.refresh = const Duration(milliseconds: 200),
+    this.refresh = const Duration(milliseconds: 500),
   });
 
   final int port;
@@ -41,6 +42,8 @@ class _ModbusTexSession implements TexSession {
     required this.refresh,
   }) {
     _snapshot = ValueNotifier<TexSnapshot>(const TexSnapshot());
+    _tex = TexG4(unitId: unitId);
+    _tex.data.addListener(_onData);
     _connect();
   }
 
@@ -51,17 +54,19 @@ class _ModbusTexSession implements TexSession {
   final int unitId;
   final Duration refresh;
 
-  final IHMInovance _ihm = IHMInovance();
+  late final TexG4 _tex;
   late final ValueNotifier<TexSnapshot> _snapshot;
-  Timer? _timer;
+
+  /// Estado de bloqueio de escape — mantido localmente até o registrador
+  /// correspondente do CLP ser confirmado (ver TODO em [TexG4.start]).
+  bool _escapeBloqueado = false;
 
   @override
   ValueListenable<TexSnapshot> get snapshot => _snapshot;
 
   Future<void> _connect() async {
     try {
-      await _ihm.connect(host: machine.ip, port: port, unitId: unitId);
-      _timer = Timer.periodic(refresh, (_) => _rebuild());
+      await _tex.connect(host: machine.ip, port: port, interval: refresh);
     } catch (e) {
       _log.severe('TEX ${machine.ip}: falha ao conectar → $e');
       _snapshot.value =
@@ -69,70 +74,77 @@ class _ModbusTexSession implements TexSession {
     }
   }
 
-  /// Lê os mapas da IHM e publica um novo snapshot.
-  void _rebuild() {
-    int lw(int i) => _ihm.LW[i] is int ? _ihm.LW[i] as int : 0;
-    bool lb(int i) => _ihm.LB[i] == true;
-
-    final phase = TexRegisterMap.phaseFromCode(lw(TexRegisterMap.lwPhase));
-    final result =
-        TexRegisterMap.resultFromCode(lw(TexRegisterMap.lwResultado));
+  /// Traduz o último [TexData] cru no [TexSnapshot] consumido pela UI.
+  void _onData() {
+    final d = _tex.data.value;
+    final running = TexRegisterMap.runningFrom(d.digitalOutputs, d.testStatus);
 
     _snapshot.value = TexSnapshot(
-      programName: '#PRG TESTE',
-      cameraNumber: lw(TexRegisterMap.lwCamaraAtual).clamp(1, 999),
-      totalCameras: lw(TexRegisterMap.lwCamaraTotal).clamp(1, 999),
-      phase: phase,
-      result: result,
-      elapsedTime: lw(TexRegisterMap.lwElapsed) / 10.0,
-      pressao: lw(TexRegisterMap.lwPressao) / 1000.0,
-      vazamento: lw(TexRegisterMap.lwVazamento) / 1000.0,
-      progresso: (lw(TexRegisterMap.lwProgresso) / 100.0).clamp(0.0, 1.0),
-      running: phase != TexPhase.parado,
-      escapeBloqueado: lb(TexRegisterMap.coilBlockEscape),
-      inputs: TexRegisterMap.pinsFrom(
-          TexRegisterMap.inputLabels, lb, TexRegisterMap.coilInputsBase),
-      outputs: TexRegisterMap.pinsFrom(
-          TexRegisterMap.outputLabels, lb, TexRegisterMap.coilOutputsBase),
-      autoCheck: TexRegisterMap.diagsFrom(
-          TexRegisterMap.autoCheckLabels, lb, TexRegisterMap.coilAutoCheckBase),
-      diagnostico: TexRegisterMap.diagsFrom(TexRegisterMap.diagnosticoLabels,
-          lb, TexRegisterMap.coilDiagnosticoBase),
+      programName: '#PRG ${d.currentParameterList}',
+      cameraNumber: d.currentChamber < 1 ? 1 : d.currentChamber,
+      totalCameras: d.currentChamber < 1 ? 1 : d.currentChamber,
+      phase: TexRegisterMap.phaseFromStatus(d.testStatus),
+      result: TexRegisterMap.resultFromOutputs(d.digitalOutputs),
+      elapsedTime: d.timeElapsed / 10.0,
+      pressao: d.pressure,
+      vazamento: d.leak,
+      progresso: 0.0,
+      running: running,
+      escapeBloqueado: _escapeBloqueado,
+      outputs: TexRegisterMap.pinsFromBits(
+          TexRegisterMap.outputLabels, d.digitalOutputs),
+      autoCheck: TexRegisterMap.diagsFromBits(
+          TexRegisterMap.autoCheckLabels, d.valveDiagnostic),
+      diagnostico: TexRegisterMap.diagsFromBits(
+          TexRegisterMap.diagnosticoLabels, d.ioDiagnostic),
+      alarme: '',
     );
   }
 
-  // ── Comandos → escrita de coils ──────────────────────────────────────────────
+  // ── Comandos do operador ─────────────────────────────────────────────────────
 
   @override
-  void start() => _pulse(TexRegisterMap.coilStart);
+  void start() => _guard(() => _tex.start(blockExhaust: _escapeBloqueado));
 
   @override
-  void stop() => _pulse(TexRegisterMap.coilStop);
+  void stop() => _guard(_tex.stop);
 
   @override
   void toggleEscapeBlock() {
-    final novo = !_snapshot.value.escapeBloqueado;
-    _ihm.Write_LB[TexRegisterMap.coilBlockEscape] = novo;
+    _escapeBloqueado = !_escapeBloqueado;
+    // Reflete imediatamente na UI mesmo antes do próximo ciclo de leitura.
+    _snapshot.value = _snapshot.value.copyWith(escapeBloqueado: _escapeBloqueado);
+  }
+
+  /// Navegação de câmara = troca do BCD selecionado no CLP.
+  @override
+  void nextCamera() {
+    final atual = _tex.data.value.currentChamber;
+    _guard(() => _tex.setBCD(atual + 1));
   }
 
   @override
-  void nextCamera() => _pulse(TexRegisterMap.coilNextCamera);
+  void prevCamera() {
+    final atual = _tex.data.value.currentChamber;
+    if (atual <= 1) return;
+    _guard(() => _tex.setBCD(atual - 1));
+  }
 
-  @override
-  void prevCamera() => _pulse(TexRegisterMap.coilPrevCamera);
-
-  /// Botões do CLP são acionados por pulso: liga e desliga a coil em seguida.
-  void _pulse(int coil) {
-    _ihm.Write_LB[coil] = true;
-    Future<void>.delayed(const Duration(milliseconds: 120), () {
-      _ihm.Write_LB[coil] = false;
+  /// Executa um comando de escrita ignorando falhas pontuais de rede (a leitura
+  /// contínua já sinaliza perda de comunicação por outro caminho).
+  void _guard(Future<bool> Function() action) {
+    if (!_tex.isConnected) return;
+    action().catchError((Object e) {
+      _log.warning('TEX ${machine.ip}: comando falhou → $e');
+      return false;
     });
   }
 
   @override
   Future<void> dispose() async {
-    _timer?.cancel();
-    await _ihm.disconnect();
+    _tex.data.removeListener(_onData);
+    await _tex.disconnect();
+    _tex.dispose();
     _snapshot.dispose();
   }
 }

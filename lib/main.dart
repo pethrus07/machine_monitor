@@ -18,7 +18,7 @@ import 'screens/machine_list_screen.dart';
 /// Configuração resolvida em tempo de inicialização. Trocar [useRealModbus]
 /// aqui (ou no [AppConfig]) é o único ponto necessário para alternar entre
 /// CLP real e simulação — nenhuma tela precisa mudar.
-const AppConfig _config = AppConfig(useRealModbus: false);
+const AppConfig _config = AppConfig(useRealModbus: true);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

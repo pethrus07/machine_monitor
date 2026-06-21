@@ -1,58 +1,23 @@
 import '../../models/tex_models.dart';
 
-/// Mapa de endereços Modbus da bancada TEX.
+/// Tradução dos campos crus da bancada TEX ([TexData]) para os tipos de UI.
 ///
-/// O app original da TEX só tinha simulação — nunca leu um CLP. Este arquivo é
-/// o contrato de integração: descreve onde cada grandeza mora nos mapas LW
-/// (registradores) e LB (coils) da IHM. Ajuste os endereços conforme a
-/// programação real do CLP; a [ModbusTexDataSource] lê/escreve exatamente daqui.
+/// O layout de registradores em si (offsets, floats) vive em
+/// [registersToTexData] (`models/tex_data.dart`) e foi verificado contra o
+/// equipamento. Aqui ficam as conversões "de negócio": bitfields → pinos/
+/// diagnósticos, e códigos de status → fase/resultado.
 ///
-/// Convenção: LW = Holding Registers (valores), LB = Coils (bits).
+/// Onde o significado dos códigos do CLP ainda não está documentado, o default
+/// é conservador e o ponto está marcado para ajuste fino em campo.
 class TexRegisterMap {
   TexRegisterMap._();
 
-  // ── Leitura de valores (LW) ──────────────────────────────────────────────────
-  /// Fase do ciclo (mapeada por [phaseFromCode]).
-  static const int lwPhase = 0;
-
-  /// Pressão atual × 1000 (ex.: 999 → 0.999 bar).
-  static const int lwPressao = 1;
-
-  /// Vazamento × 1000 (ex.: 15 → 0.015 mbar/s).
-  static const int lwVazamento = 2;
-
-  /// Progresso do ciclo em % (0–100).
-  static const int lwProgresso = 3;
-
-  /// Tempo decorrido na fase × 10 (ex.: 35 → 3.5 s).
-  static const int lwElapsed = 4;
-
-  /// Câmara atual e total.
-  static const int lwCamaraAtual = 5;
-  static const int lwCamaraTotal = 6;
-
-  /// Resultado do último teste (0=nenhum, 1=aprovado, 2=reprovado).
-  static const int lwResultado = 7;
-
-  // ── Comandos (LB de escrita) ─────────────────────────────────────────────────
-  static const int coilStart = 0;
-  static const int coilStop = 1;
-  static const int coilBlockEscape = 2;
-  static const int coilNextCamera = 3;
-  static const int coilPrevCamera = 4;
-
-  // ── Entradas digitais (LB de leitura) ────────────────────────────────────────
-  /// Primeira coil das 8 entradas (sequenciais).
-  static const int coilInputsBase = 100;
-
-  /// Primeira coil das 8 saídas (sequenciais).
-  static const int coilOutputsBase = 120;
-
-  /// Primeira coil dos 10 itens de auto-check.
-  static const int coilAutoCheckBase = 140;
-
-  /// Primeira coil dos 8 itens de diagnóstico de saída.
-  static const int coilDiagnosticoBase = 160;
+  // ── Bits de [TexData.digitalOutputs] ─────────────────────────────────────────
+  // Alinhados com [outputLabels]: bit i ↔ outputLabels[i].
+  static const int bitDigital1 = 0;
+  static const int bitAprova = 1;
+  static const int bitReprovaTeste = 2;
+  static const int bitBusy = 7;
 
   // ── Rótulos fixos (não vêm do CLP) ───────────────────────────────────────────
   static const List<String> inputLabels = [
@@ -102,58 +67,41 @@ class TexRegisterMap {
   ];
 
   // ── Conversões ───────────────────────────────────────────────────────────────
-  static TexPhase phaseFromCode(int code) {
-    switch (code) {
-      case 1:
-        return TexPhase.enchimento;
-      case 2:
-        return TexPhase.equalizacao;
-      case 3:
-        return TexPhase.estabilizacao;
-      case 4:
-        return TexPhase.medicao;
-      case 5:
-        return TexPhase.escape;
-      case 6:
-        return TexPhase.resultado;
-      default:
-        return TexPhase.parado;
-    }
+
+  /// `true` se o bit [index] estiver setado em [bitfield].
+  static bool bit(int bitfield, int index) => (bitfield & (1 << index)) != 0;
+
+  /// Fase do ciclo a partir do `testStatus` (reg 18).
+  ///
+  /// TODO(tex): mapear os códigos exatos do CLP. Por ora só distinguimos
+  /// "parado" (0) de "em andamento" — qualquer valor != 0 entra como
+  /// [TexPhase.medicao] (AVALIANDO), suficiente para indicar atividade.
+  static TexPhase phaseFromStatus(int testStatus) {
+    if (testStatus == 0) return TexPhase.parado;
+    return TexPhase.medicao;
   }
 
-  static TexResult resultFromCode(int code) {
-    switch (code) {
-      case 1:
-        return TexResult.aprovado;
-      case 2:
-        return TexResult.reprovado;
-      default:
-        return TexResult.nenhum;
-    }
+  /// Resultado do teste a partir dos bits de saída ([TexData.digitalOutputs]).
+  static TexResult resultFromOutputs(int digitalOutputs) {
+    if (bit(digitalOutputs, bitReprovaTeste)) return TexResult.reprovado;
+    if (bit(digitalOutputs, bitAprova)) return TexResult.aprovado;
+    return TexResult.nenhum;
   }
 
-  /// Constrói a lista de pinos a partir das coils lidas, começando em [base].
-  static List<TexIoPin> pinsFrom(
-    List<String> labels,
-    bool Function(int coil) read,
-    int base,
-  ) {
+  /// `true` enquanto o ciclo está rodando (saída BUSY ou status != parado).
+  static bool runningFrom(int digitalOutputs, int testStatus) =>
+      testStatus != 0 || bit(digitalOutputs, bitBusy);
+
+  /// Constrói a lista de pinos a partir de um bitfield, um bit por rótulo.
+  static List<TexIoPin> pinsFromBits(List<String> labels, int bitfield) {
     return List<TexIoPin>.generate(labels.length, (i) {
-      return TexIoPin(
-        number: i + 1,
-        label: labels[i],
-        active: read(base + i),
-      );
+      return TexIoPin(number: i + 1, label: labels[i], active: bit(bitfield, i));
     });
   }
 
-  static List<TexDiagnostic> diagsFrom(
-    List<String> labels,
-    bool Function(int coil) read,
-    int base,
-  ) {
+  static List<TexDiagnostic> diagsFromBits(List<String> labels, int bitfield) {
     return List<TexDiagnostic>.generate(labels.length, (i) {
-      return TexDiagnostic(label: labels[i], hasError: read(base + i));
+      return TexDiagnostic(label: labels[i], hasError: bit(bitfield, i));
     });
   }
 }

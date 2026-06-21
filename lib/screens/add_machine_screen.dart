@@ -11,7 +11,11 @@ import '../core/utils/validators.dart';
 /// ID) ficam globais por enquanto e, no futuro, virão num bloco "avançado"
 /// recolhido — fora do caminho de quem só quer cadastrar a máquina.
 class AddMachineScreen extends StatefulWidget {
-  const AddMachineScreen({super.key});
+  const AddMachineScreen({super.key, this.existing = const []});
+
+  /// Máquinas já cadastradas — usadas para sugerir o nome (TEX 1, TEX 2, …) e
+  /// barrar IP duplicado.
+  final List<Machine> existing;
 
   @override
   State<AddMachineScreen> createState() => _AddMachineScreenState();
@@ -24,11 +28,59 @@ class _AddMachineScreenState extends State<AddMachineScreen> {
 
   MachineType _type = MachineType.monitor;
 
+  /// Enquanto `true`, o nome acompanha a sugestão automática do tipo; ao editar
+  /// o campo manualmente, paramos de sobrescrever.
+  bool _nameAutoFilled = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _nomeCtrl.addListener(_onNameEdited);
+  }
+
   @override
   void dispose() {
+    _nomeCtrl.removeListener(_onNameEdited);
     _nomeCtrl.dispose();
     _ipCtrl.dispose();
     super.dispose();
+  }
+
+  void _onNameEdited() {
+    // Edição feita pelo usuário (não pela sugestão) desliga o auto-preenchimento.
+    if (_nomeCtrl.text != _suggestedName(_type)) _nameAutoFilled = false;
+  }
+
+  void _onTypeChanged(MachineType t) {
+    setState(() {
+      _type = t;
+      if (_nameAutoFilled) {
+        final nome = _suggestedName(t);
+        _nomeCtrl.value = TextEditingValue(
+          text: nome,
+          selection: TextSelection.collapsed(offset: nome.length),
+        );
+      }
+    });
+  }
+
+  /// Próximo nome sugerido para o tipo. Para TEX, escolhe `TEX N` com N = maior
+  /// número já usado + 1 (cai para a contagem quando não há padrão numérico).
+  String _suggestedName(MachineType type) {
+    if (type != MachineType.tex) return '';
+    final regex = RegExp(r'^TEX\s+(\d+)$', caseSensitive: false);
+    var maxN = 0;
+    var count = 0;
+    for (final m in widget.existing) {
+      if (m.type != MachineType.tex) continue;
+      count++;
+      final match = regex.firstMatch(m.nome.trim());
+      if (match != null) {
+        final n = int.tryParse(match.group(1)!) ?? 0;
+        if (n > maxN) maxN = n;
+      }
+    }
+    return 'TEX ${(maxN > count ? maxN : count) + 1}';
   }
 
   void _save() {
@@ -42,6 +94,18 @@ class _AddMachineScreenState extends State<AddMachineScreen> {
       type: _type,
     );
     Navigator.pop(context, machine);
+  }
+
+  /// Valida o IP e, além do formato, garante que não há outra máquina no mesmo
+  /// endereço (cada bancada tem a sua própria instância/IP).
+  String? _validateIp(String? value) {
+    final base = IpValidator.validate(value);
+    if (base != null) return base;
+    final ip = value!.trim();
+    if (widget.existing.any((m) => m.ip == ip)) {
+      return 'Já existe uma máquina com este IP';
+    }
+    return null;
   }
 
   @override
@@ -80,7 +144,7 @@ class _AddMachineScreenState extends State<AddMachineScreen> {
                 const SizedBox(height: 10),
                 _TypeSelector(
                   selected: _type,
-                  onChanged: (t) => setState(() => _type = t),
+                  onChanged: _onTypeChanged,
                 ),
                 const SizedBox(height: 26),
 
@@ -96,7 +160,7 @@ class _AddMachineScreenState extends State<AddMachineScreen> {
                     prefixIcon: Icon(Icons.router_outlined,
                         color: AppTheme.textSecondary, size: 20),
                   ),
-                  validator: IpValidator.validate,
+                  validator: _validateIp,
                 ),
                 const SizedBox(height: 8),
                 const Padding(
