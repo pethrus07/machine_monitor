@@ -9,9 +9,19 @@ cada uma numa notação padrão:
 
 ## Machine Monitor · produção e bancada TEX
 
-App Flutter que junta o monitor de produção (status, OEE e produção por hora) e a bancada TEX Anel Hídrico (teste de estanqueidade). Fala Modbus TCP com o CLP ou roda em simulação.
+App Flutter que junta o monitor de produção (status, OEE e produção por hora) e a bancada TEX Anel Hídrico (teste de estanqueidade). Fala Modbus TCP com o CLP; uma versão de demonstração roda com dados simulados.
 
-![Machine Monitor · produção e bancada TEX](./machine-monitor.svg)
+### Quem usa e para quê (UML)
+
+![Casos de uso · Machine Monitor · produção e bancada TEX](./machine-monitor-1-casos-de-uso.svg)
+
+### Da lista de máquinas à máquina acompanhada (BPMN 2.0)
+
+![Processo · Machine Monitor · produção e bancada TEX](./machine-monitor-2-processo.svg)
+
+### Arquitetura (C4, containers)
+
+![Arquitetura · Machine Monitor · produção e bancada TEX](./machine-monitor-3-arquitetura.svg)
 
 Editável: [`machine-monitor.excalidraw`](./machine-monitor.excalidraw), abre em [excalidraw.com](https://excalidraw.com) ou no VS Code com a extensão Excalidraw.
 
